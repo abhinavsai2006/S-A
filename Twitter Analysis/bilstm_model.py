@@ -1,0 +1,158 @@
+# BiLSTM Sentiment Analysis Model
+# This script builds a sentiment classifier using BiLSTM (Bidirectional LSTM) on the IMDB dataset sample.
+
+import nltk
+import numpy as np
+import pandas as pd
+from nltk.corpus import movie_reviews
+from nltk.tokenize import word_tokenize
+from nltk.corpus import stopwords
+from nltk.stem import WordNetLemmatizer
+import re
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, classification_report
+from tensorflow.keras.preprocessing.text import Tokenizer
+from tensorflow.keras.preprocessing.sequence import pad_sequences
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.utils.data import DataLoader, TensorDataset
+
+# GPU configuration
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+print(f"Using device: {device}")
+
+# Download required NLTK data
+nltk.download('movie_reviews')
+nltk.download('punkt')
+nltk.download('stopwords')
+nltk.download('wordnet')
+
+class SentimentBiLSTM(nn.Module):
+    def __init__(self, vocab_size, embed_dim, hidden_size):
+        super(SentimentBiLSTM, self).__init__()
+        self.embedding = nn.Embedding(vocab_size, embed_dim)
+        self.bilstm = nn.LSTM(embed_dim, hidden_size, batch_first=True, bidirectional=True)
+        self.fc1 = nn.Linear(hidden_size * 2, 64)  # *2 for bidirectional
+        self.fc2 = nn.Linear(64, 1)
+        self.dropout = nn.Dropout(0.5)
+
+    def forward(self, x):
+        x = self.embedding(x)
+        out, _ = self.bilstm(x)
+        out = out[:, -1, :]  # Take last output
+        out = F.relu(self.fc1(out))
+        out = self.dropout(out)
+        out = torch.sigmoid(self.fc2(out))
+        return out
+
+def load_data(use_imdb=False):
+    if use_imdb:
+        # Load from training.1600000.processed.noemoticon.csv with sample
+        df = pd.read_csv('training.1600000.processed.noemoticon.csv', encoding='latin-1', header=None, nrows=50000)
+        reviews = df[5].tolist()
+        labels = df[0].tolist()
+        labels = [0 if l == 0 else 1 for l in labels]  # 0: negative, 4: positive
+    else:
+        fileids = movie_reviews.fileids()
+        reviews = []
+        labels = []
+        for fileid in fileids:
+            review = movie_reviews.raw(fileid)
+            reviews.append(review)
+            if fileid.startswith('pos'):
+                labels.append(1)  # positive
+            else:
+                labels.append(0)  # negative
+    return reviews, labels
+
+def preprocess_text(text):
+    text = text.lower()
+    text = re.sub(r'<.*?>', '', text)
+    text = re.sub(r'[^a-zA-Z\s]', '', text)
+    tokens = word_tokenize(text)
+    stop_words = set(stopwords.words('english'))
+    tokens = [word for word in tokens if word not in stop_words]
+    lemmatizer = WordNetLemmatizer()
+    tokens = [lemmatizer.lemmatize(word) for word in tokens]
+    return ' '.join(tokens)
+
+if __name__ == "__main__":
+    print("Loading dataset...")
+    reviews, labels = load_data(use_imdb=True)
+    print(f"Loaded {len(reviews)} reviews")
+
+    print("Preprocessing text...")
+    preprocessed_reviews = [preprocess_text(review) for review in reviews]
+
+    # Tokenize and pad sequences
+    tokenizer = Tokenizer(num_words=5000)
+    tokenizer.fit_on_texts(preprocessed_reviews)
+    sequences = tokenizer.texts_to_sequences(preprocessed_reviews)
+    max_len = 200
+    X = pad_sequences(sequences, maxlen=max_len)
+    y = np.array(labels)
+
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+    # Convert to tensors
+    X_train_tensor = torch.tensor(X_train, dtype=torch.long)
+    y_train_tensor = torch.tensor(y_train, dtype=torch.float32).unsqueeze(1)
+    X_test_tensor = torch.tensor(X_test, dtype=torch.long)
+    y_test_tensor = torch.tensor(y_test, dtype=torch.float32).unsqueeze(1)
+
+    # Create data loaders
+    train_dataset = TensorDataset(X_train_tensor, y_train_tensor)
+    test_dataset = TensorDataset(X_test_tensor, y_test_tensor)
+    train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
+    test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False)
+
+    # Model
+    vocab_size = 5000
+    embed_dim = 128
+    hidden_size = 128
+    model = SentimentBiLSTM(vocab_size, embed_dim, hidden_size).to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    criterion = nn.BCELoss()
+
+    print("Training BiLSTM model...")
+    model.train()
+    for epoch in range(10):
+        for batch_X, batch_y in train_loader:
+            batch_X, batch_y = batch_X.to(device), batch_y.to(device)
+            optimizer.zero_grad()
+            outputs = model(batch_X)
+            loss = criterion(outputs, batch_y)
+            loss.backward()
+            optimizer.step()
+        print(f'Epoch {epoch+1}/10, Loss: {loss.item():.4f}')
+
+    # Evaluate
+    model.eval()
+    all_preds = []
+    all_labels = []
+    with torch.no_grad():
+        for batch_X, batch_y in test_loader:
+            batch_X, batch_y = batch_X.to(device), batch_y.to(device)
+            outputs = model(batch_X)
+            preds = (outputs > 0.5).float()
+            all_preds.extend(preds.cpu().numpy().flatten())
+            all_labels.extend(batch_y.cpu().numpy().flatten())
+
+    accuracy = accuracy_score(all_labels, all_preds)
+    print(f"BiLSTM Accuracy: {accuracy:.2f}")
+    print(classification_report(all_labels, all_preds))
+
+    # Prediction
+    print("\nEnter a tweet to predict sentiment (or press enter to skip):")
+    test_input = input().strip()
+    if test_input:
+        test_review = preprocess_text(test_input)
+        test_seq = tokenizer.texts_to_sequences([test_review])
+        test_pad = pad_sequences(test_seq, maxlen=max_len)
+        test_tensor = torch.tensor(test_pad, dtype=torch.long).to(device)
+        model.eval()
+        with torch.no_grad():
+            pred_prob = model(test_tensor)
+            pred = 'positive' if pred_prob.item() > 0.5 else 'negative'
+        print(f"Predicted sentiment: {pred}")
