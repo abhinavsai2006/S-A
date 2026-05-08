@@ -1,11 +1,11 @@
 # S-A: Sentiment & Analysis ML Projects
 
-This repository contains multiple machine-learning projects for classification and sentiment-analysis tasks across different domains.
+This repository contains multiple machine learning projects for classification and sentiment analysis tasks across different domains.
 
 ## Repository Modules
 
 - `Heart Disease Analysis/` — heart disease risk classification from tabular health data.
-- `Imdb Analysis/` — movie review sentiment analysis.
+- `Imdb Analysis/` — IMDb movie review sentiment analysis.
 - `Twitter Analysis/` — sentiment analysis workflows for Twitter-like text data.
 - `Stock Sentiment Analysis/` — financial text sentiment classification.
 - `Weather Analysis/` — weather-related classification experiments.
